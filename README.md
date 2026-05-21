@@ -1,311 +1,421 @@
-📘 WHITE-LABEL PBX (FusionPBX + FreeSWITCH)
-Full Implementation Guide (From Zero → SaaS Launch)
-🧭 1. Architecture Overview
+# 📘 WHITE-LABEL PBX (FusionPBX + FreeSWITCH)
 
-Your system will have 5 main layers:
+**Full Implementation Guide — From Zero to SaaS Launch**
 
-Clients (Web / Softphone / Mobile SIP apps)
-        ↓
-SIP / WebRTC Layer
-        ↓
-FreeSWITCH (Media + Call Engine)
-        ↓
-FusionPBX (Control + Multi-tenant UI)
-        ↓
-PostgreSQL + Storage + Logs
-        ↓
-Billing + CRM + Your Custom Portal
-🧰 2. Requirements
-🖥️ Infrastructure
-Minimum Production Setup (small SaaS start)
-1 × Application Server (FusionPBX)
-1 × Media Server (FreeSWITCH)
-1 × Database Server (PostgreSQL) (can be combined initially)
-Recommended Cloud Specs
-CPU: 4–8 cores per server
-RAM: 8–16GB minimum
-SSD: 100GB+
-OS: Debian 11/12 or Ubuntu 22.04 LTS
-🌐 Networking Requirements
-Static public IP (VERY important)
-Open ports:
-SIP: 5060 / 5061
-RTP media: 16384–32768 (UDP)
-Web: 80 / 443
-Firewall: UFW or iptables
-NAT configuration (critical for audio quality)
-🔧 Software Stack
-Core
-FreeSWITCH
-FusionPBX
-PostgreSQL
-Nginx / Apache (FusionPBX web server)
-Supporting tools
-Fail2Ban (security)
-Certbot (SSL)
-Redis (optional caching layer)
-Kamailio/OpenSIPS (optional scaling later)
-📊 Business Layer (you will add)
-Billing system (custom or Stripe integration)
-CRM / provisioning tool
-Customer portal (your white-label layer)
-Monitoring (Grafana + Prometheus optional)
-⚙️ 3. Installation Phase (Step-by-Step)
-🧱 STEP 1: Prepare Server
+---
+
+## 🧭 1. Architecture Overview
+
+Your system is organised into six layers — from client devices at the top down to your SaaS business layer at the bottom.
+
+```mermaid
+flowchart TD
+    subgraph Clients["👥 Client Layer"]
+        A[🌐 Web Browser]
+        B[💻 Softphone App]
+        C[📱 Mobile SIP App]
+    end
+
+    subgraph SIPLayer["🔀 SIP / WebRTC Layer"]
+        D[SIP Proxy / WebRTC Gateway]
+    end
+
+    subgraph Carriers["📡 Telecom Carriers"]
+        N[🇰🇪 Local Trunks\nTelkom · Safaricom]
+        O[🌍 International Providers\nTwilio · DIDWW]
+    end
+
+    subgraph Voice["📞 Voice Engine"]
+        E[FreeSWITCH\nMedia · RTP · NAT · Codecs]
+    end
+
+    subgraph Control["🧠 PBX Control Layer"]
+        F[FusionPBX\nMulti-tenant UI · API · Dial Plans]
+    end
+
+    subgraph Data["🗄️ Data Layer"]
+        G[(PostgreSQL)]
+        H[📁 Call Recordings]
+        I[📋 CDR Logs]
+    end
+
+    subgraph Business["💼 Business Layer"]
+        J[🖥️ Customer Portal]
+        K[🔧 Admin Portal]
+        L[💳 Billing\nStripe · Flutterwave]
+        M[🤖 Automation\nCRM · AI · WhatsApp]
+    end
+
+    A & B & C -->|SIP / WebRTC| D
+    D -->|SIP| E
+    N & O <-->|SIP Trunks| E
+    E <-->|ESL / API| F
+    F --> G & H & I
+    F --> J & K
+    J & K --> L
+    L --> M
+```
+
+---
+
+## 🧰 2. Requirements
+
+### 🖥️ Infrastructure
+
+**Minimum Production Setup (small SaaS start)**
+
+| Role | Count |
+|------|-------|
+| Application Server (FusionPBX) | 1× |
+| Media Server (FreeSWITCH) | 1× |
+| Database Server (PostgreSQL) | 1× (can be combined initially) |
+
+**Recommended Cloud Specs**
+
+- CPU: 4–8 cores per server
+- RAM: 8–16 GB minimum
+- SSD: 100 GB+
+- OS: Debian 11/12 or Ubuntu 22.04 LTS
+
+### 🌐 Networking Requirements
+
+- Static public IP (**VERY important**)
+- Open ports:
+  - SIP: `5060` / `5061`
+  - RTP media: `16384–32768` (UDP)
+  - Web: `80` / `443`
+- Firewall: UFW or iptables
+- NAT configuration (critical for audio quality)
+
+### 🔧 Software Stack
+
+**Core**
+
+- FreeSWITCH
+- FusionPBX
+- PostgreSQL
+- Nginx / Apache (FusionPBX web server)
+
+**Supporting tools**
+
+- Fail2Ban (security)
+- Certbot (SSL)
+- Redis (optional caching layer)
+- Kamailio/OpenSIPS (optional scaling later)
+
+**📊 Business Layer (you will add)**
+
+- Billing system (custom or Stripe integration)
+- CRM / provisioning tool
+- Customer portal (your white-label layer)
+- Monitoring (Grafana + Prometheus — optional)
+
+---
+
+## ⚙️ 3. Installation Phase (Step-by-Step)
+
+### 🧱 STEP 1: Prepare Server
+
+```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install git curl wget nano unzip -y
+```
 
 Set hostname:
 
+```bash
 hostnamectl set-hostname pbx.yourdomain.com
-🔐 STEP 2: Firewall Setup
+```
+
+### 🔐 STEP 2: Firewall Setup
+
+```bash
 ufw allow 22
 ufw allow 80
 ufw allow 443
 ufw allow 5060:5061/udp
 ufw allow 16384:32768/udp
 ufw enable
-📦 STEP 3: Install FreeSWITCH
+```
+
+### 📦 STEP 3: Install FreeSWITCH
 
 Install dependencies:
 
+```bash
 apt install -y gnupg2 wget lsb-release
+```
 
 Install FreeSWITCH (official packages or build from source depending on scale).
 
-👉 For production SaaS, building from source is preferred later.
+> 👉 For production SaaS, building from source is preferred later.
 
-🧠 STEP 4: Install FusionPBX
+### 🧠 STEP 4: Install FusionPBX
 
-Typical install flow:
-
+```bash
 cd /usr/src
 git clone https://github.com/fusionpbx/fusionpbx-install.sh.git
 cd fusionpbx-install.sh/debian
 ./install.sh
+```
 
 This installs:
 
-FreeSWITCH
-FusionPBX
-PostgreSQL
-Web UI
-Default configuration
-🌐 STEP 5: Configure Domain
+- FreeSWITCH
+- FusionPBX
+- PostgreSQL
+- Web UI
+- Default configuration
+
+### 🌐 STEP 5: Configure Domain
 
 Access:
 
+```
 https://your-server-ip
+```
 
 Then:
 
-Create admin account
-Set domain (your SaaS domain)
-Enable SSL (Let’s Encrypt)
-🏢 4. Multi-Tenant (White Label Core)
+1. Create admin account
+2. Set domain (your SaaS domain)
+3. Enable SSL (Let's Encrypt)
 
-This is the MOST IMPORTANT PART.
+---
 
-FusionPBX supports Domains = Tenants
+## 🏢 4. Multi-Tenant (White Label Core)
 
-For each customer:
+> This is the **MOST IMPORTANT PART**.
 
-Create a new DOMAIN:
+FusionPBX supports **Domains = Tenants**.
 
+For each customer, create a new domain:
+
+```
 client1.yourpbx.com
 client2.yourpbx.com
+```
 
-OR:
+Or use a separate SIP realm per tenant:
 
-Separate SIP realm per tenant:
-
+```
 client1-sip.yourdomain.com
-👤 Tenant Isolation Model
+```
+
+### 👤 Tenant Isolation Model
 
 Each tenant gets:
 
-Extensions
-SIP users
-IVR
-Call queues
-Voicemail
-CDR logs
+- Extensions
+- SIP users
+- IVR
+- Call queues
+- Voicemail
+- CDR logs
 
-👉 Fully isolated inside PostgreSQL schema logic.
+> 👉 Fully isolated inside PostgreSQL schema logic.
 
-🎨 5. White-Label Branding
-Change FusionPBX branding:
+---
 
-Modify:
+## 🎨 5. White-Label Branding
 
-Logo
-Login page CSS
-Footer branding
-System name
+Modify the following to rebrand FusionPBX:
 
-Paths:
+- Logo
+- Login page CSS
+- Footer branding
+- System name
 
+**Paths:**
+
+```
 /var/www/fusionpbx
+```
 
-Key changes:
+**Key changes:**
 
-Replace FusionPBX logo
-Change “FusionPBX” text in templates
-Custom CSS theme
-Recommended approach:
+- Replace FusionPBX logo
+- Change "FusionPBX" text in templates
+- Apply custom CSS theme
 
-Instead of deep editing:
+**Recommended approach:**
 
-👉 Use a reverse proxy (Nginx) to:
+Instead of deep editing, use a reverse proxy (Nginx) to:
 
-inject branding layer
-override UI assets
-control login screen appearance
-📞 6. SIP & Call Setup
-Configure Trunks
+- Inject branding layer
+- Override UI assets
+- Control login screen appearance
 
-You will connect:
+---
 
-Local carriers in Kenya (Telkom, Safaricom SIP where available)
-International SIP providers (Twilio, DIDWW, etc.)
+## 📞 6. SIP & Call Setup
 
-In FusionPBX:
+### Configure Trunks
 
-Accounts → Gateways → Add SIP Trunk
-RTP Optimization (VERY IMPORTANT)
+Connect:
+
+- Local carriers in Kenya (Telkom, Safaricom SIP where available)
+- International SIP providers (Twilio, DIDWW, etc.)
+
+In FusionPBX: **Accounts → Gateways → Add SIP Trunk**
+
+### RTP Optimization (**VERY IMPORTANT**)
 
 Edit:
 
+```
 /etc/freeswitch/autoload_configs/switch.conf.xml
+```
 
 Set:
 
-RTP port range
-NAT settings
-📱 7. Softphone Strategy (Customer Experience)
+- RTP port range
+- NAT settings
 
-You have 3 options:
+---
 
-Option A: Use existing SIP apps (fastest)
-Zoiper
-Linphone
-Grandstream Wave
+## 📱 7. Softphone Strategy (Customer Experience)
 
-✔ No development needed
+**Option A: Use existing SIP apps (fastest)**
 
-Option B: Branded softphone (recommended SaaS path)
-Build React Native or Flutter app
-Use SIP SDK:
-PJSIP
-Linphone SDK
-Option C: WebRTC browser phone
-Built into FusionPBX (limited)
-Or custom WebRTC SIP client
-💳 8. Billing System (Critical for SaaS)
+- Zoiper
+- Linphone
+- Grandstream Wave
 
-FusionPBX does NOT provide full billing.
+> ✔ No development needed
 
-You must add:
+**Option B: Branded softphone (recommended SaaS path)**
 
-Options:
-🔹 Simple start
-Manual billing per extension
-🔹 SaaS model (recommended)
+- Build React Native or Flutter app
+- Use SIP SDK: PJSIP or Linphone SDK
+
+**Option C: WebRTC browser phone**
+
+- Built into FusionPBX (limited)
+- Or custom WebRTC SIP client
+
+---
+
+## 💳 8. Billing System (Critical for SaaS)
+
+FusionPBX does **NOT** provide full billing. You must add your own.
+
+**🔹 Simple start**
+
+- Manual billing per extension
+
+**🔹 SaaS model (recommended)**
 
 Build:
 
-Customer portal
-Subscription system
-Usage tracking (CDR-based billing)
-Tools:
-Stripe (global)
-Flutterwave (Africa-friendly)
-Custom PostgreSQL billing tables
-📊 9. Call Data & Analytics
+- Customer portal
+- Subscription system
+- Usage tracking (CDR-based billing)
+
+**Tools:**
+
+- Stripe (global)
+- Flutterwave (Africa-friendly)
+- Custom PostgreSQL billing tables
+
+---
+
+## 📊 9. Call Data & Analytics
 
 Enable:
 
-Call Detail Records (CDR)
-Call recording storage
-Real-time monitoring
+- Call Detail Records (CDR)
+- Call recording storage
+- Real-time monitoring
 
 You will use:
 
-FusionPBX CDR tables
-FreeSWITCH event socket (advanced analytics)
-🔐 10. Security Hardening
+- FusionPBX CDR tables
+- FreeSWITCH event socket (advanced analytics)
 
-Install:
+---
 
+## 🔐 10. Security Hardening
+
+```bash
 apt install fail2ban
+```
 
 Configure:
 
-SIP brute-force protection
-IP whitelisting for admin panel
-SSL everywhere
-Disable anonymous SIP
-📈 11. Scaling Strategy (VERY IMPORTANT for SaaS)
+- SIP brute-force protection
+- IP whitelisting for admin panel
+- SSL everywhere
+- Disable anonymous SIP
 
-When you grow:
+---
 
-Phase 1
-Single FusionPBX + FreeSWITCH server
-Phase 2
-Separate:
-DB server
-PBX controller
-Media servers
-Phase 3 (carrier-grade)
-Kamailio (SIP proxy load balancing)
-Multiple FreeSWITCH nodes
-Kubernetes or VM cluster
-🧩 12. Your White-Label SaaS Layer (What YOU build)
+## 📈 11. Scaling Strategy (**VERY IMPORTANT** for SaaS)
 
-This is what makes you 3CX competitor:
+| Phase | Setup |
+|-------|-------|
+| Phase 1 | Single FusionPBX + FreeSWITCH server |
+| Phase 2 | Separate DB server, PBX controller, and media servers |
+| Phase 3 (carrier-grade) | Kamailio SIP proxy, multiple FreeSWITCH nodes, Kubernetes or VM cluster |
 
-Customer Portal
-Sign up / login
-Buy extensions
-Manage users
-View usage
-Pay bills
-Admin Portal
-Provision tenants
-Assign SIP trunks
-Monitor usage
-Suspend accounts
-Automation (your strength)
-WhatsApp integration (ERPNext idea fits here)
-AI call routing
-Ticket creation from calls/messages
-🚀 13. Deployment Checklist
+---
+
+## 🧩 12. Your White-Label SaaS Layer (What YOU Build)
+
+**Customer Portal**
+
+- Sign up / login
+- Buy extensions
+- Manage users
+- View usage
+- Pay bills
+
+**Admin Portal**
+
+- Provision tenants
+- Assign SIP trunks
+- Monitor usage
+- Suspend accounts
+
+**Automation**
+
+- WhatsApp integration
+- AI call routing
+- Ticket creation from calls/messages
+
+---
+
+## 🚀 13. Deployment Checklist
 
 Before launch:
 
-✔ SIP trunk tested
-✔ Outbound calls working
-✔ Inbound routing working
-✔ NAT audio OK
-✔ SSL active
-✔ Tenant isolation verified
-✔ Billing tracking working
-✔ Fail2Ban active
-✔ Backups configured
+- [x] SIP trunk tested
+- [x] Outbound calls working
+- [x] Inbound routing working
+- [x] NAT audio OK
+- [x] SSL active
+- [x] Tenant isolation verified
+- [x] Billing tracking working
+- [x] Fail2Ban active
+- [x] Backups configured
 
-🧠 14. Common Mistakes to Avoid
+---
 
-❌ Editing FreeSWITCH core without backup
-❌ Ignoring NAT/RTP configuration (causes no audio issues)
-❌ Not planning billing early
-❌ Running single server for too long
-❌ Exposing FusionPBX admin publicly without IP restriction
+## 🧠 14. Common Mistakes to Avoid
 
-🎯 FINAL SUMMARY
+- ❌ Editing FreeSWITCH core without backup
+- ❌ Ignoring NAT/RTP configuration (causes no-audio issues)
+- ❌ Not planning billing early
+- ❌ Running single server for too long
+- ❌ Exposing FusionPBX admin publicly without IP restriction
 
-If you choose this path:
+---
 
-✔ FusionPBX gives you PBX core + UI
-✔ FreeSWITCH gives you carrier-grade voice engine
-✔ You add branding + billing + customer portal
-✔ You become a SaaS PBX provider (like 3CX alternative)
+## 🎯 Final Summary
+
+| Component | Role |
+|-----------|------|
+| FusionPBX | PBX core + UI |
+| FreeSWITCH | Carrier-grade voice engine |
+| Your Layer | Branding + billing + customer portal |
+| End Result | SaaS PBX provider (3CX alternative) |
