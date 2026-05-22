@@ -1,6 +1,8 @@
-# 📘 WHITE-LABEL PBX (FusionPBX + FreeSWITCH)
+# 📘 WHITE-LABEL PBX (Asterisk + FreePBX)
 
 **Full Implementation Guide — From Zero to SaaS Launch**
+
+> Stack: Asterisk 20 LTS · FreePBX 17 · MariaDB · Debian 12
 
 ---
 
@@ -26,15 +28,15 @@ flowchart TD
     end
 
     subgraph Voice["📞 Voice Engine"]
-        E[FreeSWITCH\nMedia · RTP · NAT · Codecs]
+        E[Asterisk 20 LTS\nMedia · RTP · NAT · Codecs · Dialplan]
     end
 
     subgraph Control["🧠 PBX Control Layer"]
-        F[FusionPBX\nMulti-tenant UI · API · Dial Plans]
+        F[FreePBX 17\nMulti-tenant UI · Module System · ARI]
     end
 
     subgraph Data["🗄️ Data Layer"]
-        G[(PostgreSQL)]
+        G[(MariaDB)]
         H[📁 Call Recordings]
         I[📋 CDR Logs]
     end
@@ -47,9 +49,9 @@ flowchart TD
     end
 
     A & B & C -->|SIP / WebRTC| D
-    D -->|SIP| E
+    D -->|PJSIP| E
     N & O <-->|SIP Trunks| E
-    E <-->|ESL / API| F
+    E <-->|AMI / ARI| F
     F --> G & H & I
     F --> J & K
     J & K --> L
@@ -66,16 +68,15 @@ flowchart TD
 
 | Role | Count |
 |------|-------|
-| Application Server (FusionPBX) | 1× |
-| Media Server (FreeSWITCH) | 1× |
-| Database Server (PostgreSQL) | 1× (can be combined initially) |
+| Application Server (FreePBX + Asterisk) | 1× |
+| Database Server (MariaDB) | 1× (can be combined initially) |
 
 **Recommended Cloud Specs**
 
 - CPU: 4–8 cores per server
 - RAM: 8–16 GB minimum
 - SSD: 100 GB+
-- OS: Debian 11/12 or Ubuntu 22.04 LTS
+- OS: Debian 12 (Bookworm)
 
 ### 🌐 Networking Requirements
 
@@ -84,209 +85,184 @@ flowchart TD
   - SIP: `5060` / `5061`
   - RTP media: `16384–32768` (UDP)
   - Web: `80` / `443`
-- Firewall: UFW or iptables
+  - Asterisk ARI: `8088` / `8089` (internal only)
+  - Asterisk AMI: `5038` (internal only)
+- Firewall: iptables (configured by FreePBX installer)
 - NAT configuration (critical for audio quality)
 
 ### 🔧 Software Stack
 
 **Core**
 
-- FreeSWITCH
-- FusionPBX
-- PostgreSQL
-- Nginx / Apache (FusionPBX web server)
+- Asterisk 20 LTS
+- FreePBX 17
+- MariaDB 10.x
+- Apache + PHP 8.x
 
 **Supporting tools**
 
-- Fail2Ban (security)
-- Certbot (SSL)
-- Redis (optional caching layer)
-- Kamailio/OpenSIPS (optional scaling later)
+- Fail2Ban (SIP brute-force protection)
+- Certbot (SSL via Let's Encrypt)
+- Redis (optional session caching)
+- Kamailio (optional SIP load balancer — Phase 3)
 
 **📊 Business Layer (you will add)**
 
-- Billing system (custom or Stripe integration)
+- Billing system (custom or Stripe / Flutterwave)
 - CRM / provisioning tool
 - Customer portal (your white-label layer)
 - Monitoring (Grafana + Prometheus — optional)
 
 ---
 
-## ⚙️ 3. Installation Phase (Step-by-Step)
+## ⚙️ 3. Installation
 
-### 🧱 STEP 1: Prepare Server
-
-```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install git curl wget nano unzip -y
-```
-
-Set hostname:
+### 🧱 STEP 1: Prepare Server (Debian 12)
 
 ```bash
+apt update && apt upgrade -y
+apt install -y git curl wget nano unzip net-tools
 hostnamectl set-hostname pbx.yourdomain.com
 ```
 
-### 🔐 STEP 2: Firewall Setup
+### 🔐 STEP 2: Firewall — open required ports
 
 ```bash
-ufw allow 22
-ufw allow 80
-ufw allow 443
-ufw allow 5060:5061/udp
+apt install -y ufw
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw allow 5060/udp
+ufw allow 5061/udp
+ufw allow 5060/tcp
 ufw allow 16384:32768/udp
-ufw enable
+ufw --force enable
 ```
 
-### 📦 STEP 3: Install FreeSWITCH
-
-Install dependencies:
+### 📦 STEP 3: Install Asterisk + FreePBX (official Sangoma installer)
 
 ```bash
-apt install -y gnupg2 wget lsb-release
-```
-
-Add FreeSWITCH official repo and install:
-
-```bash
-wget -O - https://files.freeswitch.org/repo/deb/debian-release/fsstretch-archive-keyring.asc | apt-key add -
-echo "deb [signed-by=/usr/share/keyrings/freeswitch-archive-keyring.gpg] https://files.freeswitch.org/repo/deb/debian-release/ $(lsb_release -sc) main" \
-  > /etc/apt/sources.list.d/freeswitch.list
-apt update
-apt install -y freeswitch-meta-all
-```
-
-> 👉 For production SaaS, building from source is preferred for full codec and module control.
-
-### 🧠 STEP 4: Install FusionPBX
-
-```bash
-cd /usr/src
-git clone https://github.com/fusionpbx/fusionpbx-install.sh.git
-cd fusionpbx-install.sh/debian
-./install.sh
+wget https://github.com/FreePBX/sng_freepbx_debian_install/raw/master/sng_freepbx_debian_install.sh
+bash sng_freepbx_debian_install.sh
 ```
 
 This installs:
 
-- FreeSWITCH
-- FusionPBX
-- PostgreSQL
-- Web UI
-- Default configuration
+- Asterisk 20 LTS (compiled from source)
+- FreePBX 17 with all core modules
+- MariaDB
+- Apache + PHP 8.x
+- All system dependencies
 
-### 🌐 STEP 5: Configure Domain
+> **⚠️ Takes 20–40 minutes. Do not close the terminal.**
 
-Access:
+### 🌐 STEP 4: First Login
 
 ```
-https://your-server-ip
+http://your-server-ip/admin
 ```
 
-Then:
+Complete the FreePBX setup wizard:
 
-1. Create admin account
-2. Set domain (your SaaS domain)
-3. Enable SSL (Let's Encrypt)
+1. Set admin username + password
+2. Set system hostname
+3. Run module updates: **Admin → Module Admin → Check Online**
+
+### 🔒 STEP 5: Enable SSL
+
+```bash
+apt install -y certbot python3-certbot-apache
+certbot --apache -d pbx.yourdomain.com
+```
 
 ---
 
-## 🏢 4. Multi-Tenant (White Label Core)
+## 🏢 4. Multi-Tenant Design
 
-> This is the **MOST IMPORTANT PART**.
+FreePBX supports two multi-tenant models. Choose based on your scale:
 
-FusionPBX supports **Domains = Tenants**.
+### Model A — Context-Based (recommended for < 50 tenants)
 
-For each customer, create a new domain:
-
-```
-client1.yourpbx.com
-client2.yourpbx.com
-```
-
-Or use a separate SIP realm per tenant:
+Each tenant gets an isolated Asterisk **context** in the dialplan. Extensions are prefixed or namespaced, and tenants cannot dial across contexts.
 
 ```
-client1-sip.yourdomain.com
+[tenant-client1]
+exten => _1XXX,1,Dial(PJSIP/${EXTEN}@client1)
+
+[tenant-client2]
+exten => _2XXX,1,Dial(PJSIP/${EXTEN}@client2)
 ```
 
-### 👤 Tenant Isolation Model
+**In FreePBX:** Create a separate **User Context** per tenant under **Admin → User Management**.
 
-Each tenant gets:
+**Pros:** Single server, low overhead
+**Cons:** Shared Asterisk process — one misconfiguration can affect all tenants
 
-- Extensions
-- SIP users
-- IVR
-- Call queues
-- Voicemail
-- CDR logs
+### Model B — Instance-Based (recommended for > 50 tenants or strict isolation)
 
-> 👉 Fully isolated inside PostgreSQL schema logic.
+Each tenant runs their own FreePBX + Asterisk instance (Docker container or separate VM).
 
-### 🗄️ PostgreSQL Multi-Tenant Schema Design
+```
+Tenant A → Docker container → Asterisk instance A → Port 5062
+Tenant B → Docker container → Asterisk instance B → Port 5064
+```
 
-FusionPBX uses a **shared schema** with `domain_uuid` as the tenant key on every row. Understanding this is critical for custom billing queries and reporting.
+**Kamailio** routes incoming SIP to the correct instance based on the SIP domain.
 
-**Key tables and their tenant key:**
+**Pros:** Full isolation, independent upgrades
+**Cons:** Higher resource usage
+
+### 🗄️ MariaDB Tenant Schema
+
+FreePBX uses the `asterisk` database. Add your own billing database alongside it:
 
 ```sql
--- Every major table carries domain_uuid
-SELECT table_name
-FROM information_schema.columns
-WHERE column_name = 'domain_uuid'
-  AND table_schema = 'public';
-```
+CREATE DATABASE billing;
+USE billing;
 
-**Useful queries for tenant management:**
+CREATE TABLE tenants (
+    tenant_id       VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    company_name    TEXT NOT NULL,
+    email           TEXT NOT NULL,
+    sip_context     TEXT NOT NULL,   -- matches Asterisk context
+    plan            TEXT DEFAULT 'starter',
+    status          TEXT DEFAULT 'active',
+    created_at      DATETIME DEFAULT NOW()
+);
 
-```sql
--- List all tenants (domains)
-SELECT domain_uuid, domain_name, domain_enabled
-FROM v_domains
-ORDER BY domain_name;
+CREATE TABLE plans (
+    plan_id         VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    name            TEXT NOT NULL,
+    monthly_fee     DECIMAL(10,2) NOT NULL,
+    included_minutes INT DEFAULT 0,
+    max_extensions  INT DEFAULT 5,
+    price_per_min   DECIMAL(8,4) DEFAULT 0.0200
+);
 
--- Count extensions per tenant
-SELECT d.domain_name, COUNT(e.extension_uuid) AS extensions
-FROM v_domains d
-LEFT JOIN v_extensions e USING (domain_uuid)
-GROUP BY d.domain_name
-ORDER BY extensions DESC;
-
--- Pull CDR for a specific tenant (last 30 days)
-SELECT start_epoch, caller_id_number, destination_number,
-       duration, billsec, hangup_cause
-FROM v_xml_cdr
-WHERE domain_uuid = '<tenant-uuid>'
-  AND start_epoch > EXTRACT(EPOCH FROM NOW() - INTERVAL '30 days')
-ORDER BY start_epoch DESC;
-```
-
-**Creating a new tenant via SQL (programmatic provisioning):**
-
-```sql
-INSERT INTO v_domains (domain_uuid, domain_name, domain_enabled, domain_description)
-VALUES (gen_random_uuid(), 'client1.yourpbx.com', 'true', 'Client One');
+CREATE TABLE invoices (
+    invoice_id      VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    tenant_id       VARCHAR(36),
+    period_start    DATE,
+    period_end      DATE,
+    total           DECIMAL(10,2),
+    status          TEXT DEFAULT 'draft',
+    stripe_id       TEXT,
+    created_at      DATETIME DEFAULT NOW(),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
+);
 ```
 
 ### 🔐 Role-Based Access Control (RBAC)
 
-FusionPBX ships with built-in groups. Map these to your SaaS roles:
+FreePBX ships with built-in user roles. Map them to your SaaS tiers:
 
-| FusionPBX Group | Your SaaS Role | Permissions |
-|-----------------|----------------|-------------|
-| superadmin | Platform Admin | Full system access |
-| admin | Tenant Admin | Manage own domain only |
-| user | End User | Own extension + voicemail |
-| agent | Call Centre Agent | Queues + own CDR |
-
-**Assign a user to a group:**
-
-```sql
-INSERT INTO v_group_users (group_user_uuid, domain_uuid, group_name, user_uuid)
-VALUES (gen_random_uuid(), '<domain_uuid>', 'admin', '<user_uuid>');
-```
-
-**⚠️ Production pitfall:** Never give tenant admins access to `Advanced → Defaults` — they can overwrite global FreeSWITCH config.
+| FreePBX Role | Your SaaS Role | Access |
+|--------------|----------------|--------|
+| Administrator | Platform Admin | Full system |
+| SuperAdmin | Reseller | Manage assigned tenants |
+| User | Tenant Admin | Own extensions, CDR, voicemail |
 
 ---
 
@@ -295,24 +271,50 @@ VALUES (gen_random_uuid(), '<domain_uuid>', 'admin', '<user_uuid>');
 ### File Locations
 
 ```
-/var/www/fusionpbx/                  ← PHP source
-/var/www/fusionpbx/themes/default/   ← CSS, images, layout
-/var/www/fusionpbx/app/              ← Per-app templates
+/var/www/html/admin/                  ← FreePBX admin UI (PHP)
+/var/www/html/admin/assets/           ← CSS, images
+/etc/freepbx.conf                     ← Core config
 ```
 
-**Key changes:**
+### Quick Branding Changes
 
-- Replace FusionPBX logo
-- Change "FusionPBX" text in templates
-- Apply custom CSS theme
+**Replace logo:**
 
-### Nginx Reverse Proxy Branding Layer (Recommended)
+```bash
+cp /path/to/your-logo.png /var/www/html/admin/assets/images/logo.png
+```
 
-Rather than editing FusionPBX source directly (hard to maintain across upgrades), run a branded Nginx reverse proxy in front of FusionPBX:
+**Change page title and footer** — edit `/var/www/html/admin/views/header.php`:
+
+```php
+// Replace:
+<title>FreePBX Administration</title>
+// With:
+<title>MyPBX Administration</title>
+```
+
+**Custom CSS** — create `/var/www/html/admin/assets/css/custom.css`:
+
+```css
+/* Brand colours */
+.navbar { background-color: #0066cc !important; }
+.btn-primary { background-color: #0066cc; border-color: #004499; }
+
+/* Hide Sangoma/FreePBX references */
+.sangoma-logo, .freepbx-footer { display: none !important; }
+```
+
+Add to the header template:
+
+```html
+<link rel="stylesheet" href="/admin/assets/css/custom.css">
+```
+
+### Nginx Reverse Proxy (Recommended for Production)
+
+Run Nginx in front of Apache to inject branding and control the login screen:
 
 ```nginx
-# /etc/nginx/sites-available/pbx-whitelabel
-
 server {
     listen 443 ssl http2;
     server_name portal.yourpbx.com;
@@ -320,266 +322,161 @@ server {
     ssl_certificate     /etc/letsencrypt/live/portal.yourpbx.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/portal.yourpbx.com/privkey.pem;
 
-    # Inject custom branding CSS on every HTML response
     sub_filter '</head>'
-        '<link rel="stylesheet" href="/custom/brand.css">
-         <script src="/custom/brand.js"></script></head>';
+        '<link rel="stylesheet" href="/custom/brand.css"></head>';
     sub_filter_once on;
-    sub_filter_types text/html;
 
-    # Serve your own branding assets
     location /custom/ {
-        alias /var/www/whitelabel/assets/;
+        alias /var/www/whitelabel/;
     }
 
-    # Override the FusionPBX logo
-    location = /themes/default/images/logo.png {
-        alias /var/www/whitelabel/assets/logo.png;
-    }
-
-    # Proxy everything else to FusionPBX
     location / {
-        proxy_pass         http://127.0.0.1:8080;
+        proxy_pass         http://127.0.0.1:80;
         proxy_set_header   Host $host;
         proxy_set_header   X-Real-IP $remote_addr;
-        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto https;
         proxy_read_timeout 90;
     }
 }
 ```
 
-**`/var/www/whitelabel/assets/brand.css` example:**
+---
 
-```css
-/* Hide "FusionPBX" text in footer and header */
-.footer-copyright, #footer { display: none !important; }
+## 📞 6. SIP Trunk Setup (PJSIP)
 
-/* Replace page title */
-.navbar-brand::after { content: "MyPBX Portal"; }
-.navbar-brand img { content: url("/custom/logo.png"); }
+> Always use **PJSIP** — legacy `chan_sip` is deprecated in Asterisk 20.
 
-/* Brand colours */
-:root {
-  --primary: #0066cc;
-  --secondary: #004499;
-}
-```
+### Add a SIP Trunk in FreePBX
 
-> **⚠️ Production pitfall:** `sub_filter` requires `ngx_http_sub_module`. Confirm with `nginx -V 2>&1 | grep sub`.
+**Connectivity → Trunks → Add Trunk → Add PJSIP Trunk**
+
+| Field | Value |
+|-------|-------|
+| Trunk Name | `twilio` |
+| Username | your account SID |
+| Secret | your auth token |
+| SIP Server | `your-account.pstn.twilio.com` |
+| Context | `from-trunk` |
+
+### NAT Configuration (VERY IMPORTANT)
+
+In FreePBX: **Admin → Asterisk SIP Settings**
+
+| Setting | Value |
+|---------|-------|
+| External IP | `your-public-ip` |
+| Local Networks | `192.168.0.0/16`, `10.0.0.0/8` |
+| NAT | `yes` |
+| RTP Port Range | `16384–32768` |
+
+This writes to `/etc/asterisk/pjsip.conf` automatically.
+
+> **⚠️ Production pitfall:** One-way audio is almost always a NAT misconfiguration. Always test from an external network, not the same LAN as the server.
 
 ---
 
-## 📞 6. SIP & Call Setup
-
-### Configure Trunks
-
-Connect:
-
-- Local carriers in Kenya (Telkom, Safaricom SIP where available)
-- International SIP providers (Twilio, DIDWW, etc.)
-
-In FusionPBX: **Accounts → Gateways → Add SIP Trunk**
-
-**Example gateway config (Twilio):**
-
-```xml
-<!-- /etc/freeswitch/sip_profiles/external/twilio.xml -->
-<gateway name="twilio">
-  <param name="username"     value="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"/>
-  <param name="password"     value="your_auth_token"/>
-  <param name="proxy"        value="your-account.pstn.twilio.com"/>
-  <param name="register"     value="false"/>
-  <param name="caller-id-in-from" value="true"/>
-  <param name="contact-params" value="transport=tls"/>
-</gateway>
-```
-
-### RTP Optimization (**VERY IMPORTANT**)
-
-Edit `/etc/freeswitch/autoload_configs/switch.conf.xml`:
-
-```xml
-<param name="rtp-start-port" value="16384"/>
-<param name="rtp-end-port"   value="32768"/>
-
-<!-- NAT traversal — set to your server's PUBLIC IP -->
-<param name="ext-rtp-ip"  value="autonat:YOUR_PUBLIC_IP"/>
-<param name="ext-sip-ip"  value="YOUR_PUBLIC_IP"/>
-```
-
-Edit `/etc/freeswitch/sip_profiles/internal.xml`:
-
-```xml
-<param name="ext-rtp-ip"  value="$${external_rtp_ip}"/>
-<param name="ext-sip-ip"  value="$${external_sip_ip}"/>
-<param name="local-network-acl" value="localnet.auto"/>
-<param name="aggressive-nat-detection" value="true"/>
-```
-
-> **⚠️ Production pitfall:** Misconfigured NAT is the #1 cause of one-way audio. Always test with `sngrep` to trace SIP and verify RTP flows.
-
----
-
-## 📱 7. Softphone Strategy (Customer Experience)
+## 📱 7. Softphone Strategy
 
 **Option A: Use existing SIP apps (fastest)**
 
-- Zoiper
+- Zoiper (Android / iOS / Desktop)
 - Linphone
 - Grandstream Wave
 
-> ✔ No development needed
+> ✔ No development needed — hand SIP credentials to customers
 
-**Option B: Branded softphone (recommended SaaS path)**
+**Option B: Branded softphone**
 
-- Build React Native or Flutter app
-- Use SIP SDK: PJSIP or Linphone SDK
+- React Native or Flutter app
+- SIP SDK: PJSIP or Linphone SDK
 
 **Option C: WebRTC browser phone**
 
-- Built into FusionPBX (limited)
-- Or custom WebRTC SIP client using [JsSIP](https://jssip.net/) + FreeSWITCH `mod_verto`
+- FreePBX includes UCP (User Control Panel) with WebRTC phone
+- Or build a custom WebRTC client using JsSIP + Asterisk `res_http_websocket`
 
-**Recommended provisioning flow for softphones:**
+**Provisioning flow:**
 
 ```
-Customer signs up → Portal generates SIP credentials → 
-QR code / email sent → Customer scans in softphone app → Connected
+Customer signs up
+    → Portal creates FreePBX extension via ARI/admin API
+    → Generates SIP credentials
+    → Sends welcome email with QR code
+    → Customer scans in Zoiper → Connected
 ```
 
 ---
 
-## 💳 8. Billing System Design
+## 💳 8. Billing System
 
-FusionPBX does **NOT** provide full billing. You must add your own.
+### Asterisk CDR Table (MariaDB)
 
-### PostgreSQL Billing Schema
-
-Add these tables to your own database (separate from FusionPBX's DB):
+Asterisk writes all call records to `asteriskcdrdb.cdr`:
 
 ```sql
--- Tenants (mirrors v_domains)
-CREATE TABLE tenants (
-    tenant_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    domain_uuid     UUID UNIQUE NOT NULL,   -- FK to FusionPBX v_domains
-    company_name    TEXT NOT NULL,
-    email           TEXT NOT NULL,
-    plan            TEXT NOT NULL DEFAULT 'starter',
-    status          TEXT NOT NULL DEFAULT 'active',
-    created_at      TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Subscription plans
-CREATE TABLE plans (
-    plan_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name            TEXT NOT NULL,          -- e.g. 'starter', 'business', 'enterprise'
-    monthly_fee     NUMERIC(10,2) NOT NULL,
-    included_minutes INT NOT NULL DEFAULT 0,
-    max_extensions  INT NOT NULL DEFAULT 5,
-    price_per_min   NUMERIC(8,4) NOT NULL DEFAULT 0.0200
-);
-
--- Extensions being billed
-CREATE TABLE billed_extensions (
-    ext_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID REFERENCES tenants(tenant_id),
-    extension_uuid  UUID NOT NULL,          -- FK to FusionPBX v_extensions
-    extension_num   TEXT NOT NULL,
-    monthly_fee     NUMERIC(10,2) NOT NULL DEFAULT 5.00,
-    active          BOOLEAN DEFAULT TRUE
-);
-
--- CDR-based call billing (populated from FreeSWITCH CDR)
-CREATE TABLE call_records (
-    cdr_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID REFERENCES tenants(tenant_id),
-    call_uuid       UUID NOT NULL,
-    caller          TEXT,
-    destination     TEXT,
-    direction       TEXT,                   -- 'inbound' | 'outbound'
-    start_time      TIMESTAMPTZ,
-    duration_sec    INT,
-    billable_sec    INT,
-    cost            NUMERIC(10,4),
-    carrier         TEXT,
-    created_at      TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Monthly invoices
-CREATE TABLE invoices (
-    invoice_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID REFERENCES tenants(tenant_id),
-    period_start    DATE NOT NULL,
-    period_end      DATE NOT NULL,
-    subtotal        NUMERIC(10,2),
-    tax             NUMERIC(10,2) DEFAULT 0,
-    total           NUMERIC(10,2),
-    status          TEXT DEFAULT 'draft',   -- draft | sent | paid | overdue
-    stripe_invoice_id TEXT,
-    created_at      TIMESTAMPTZ DEFAULT NOW()
-);
+USE asteriskcdrdb;
+DESCRIBE cdr;
+-- Key columns:
+-- calldate    DATETIME      -- call start time
+-- src         VARCHAR(80)   -- caller number
+-- dst         VARCHAR(80)   -- destination
+-- duration    INT           -- total duration (seconds)
+-- billsec     INT           -- billable seconds (after answer)
+-- disposition VARCHAR(45)   -- ANSWERED, NO ANSWER, BUSY, FAILED
+-- accountcode VARCHAR(20)   -- set this to tenant_id for billing
+-- uniqueid    VARCHAR(32)   -- unique call ID
 ```
 
-### CDR Processing Flow
+**Set accountcode per tenant in Asterisk dialplan:**
 
 ```
-FreeSWITCH call ends
-        ↓
-mod_cdr_pg_csv writes to v_xml_cdr
-        ↓
-Your billing worker polls v_xml_cdr every 60s
-        ↓
-Lookup tenant by domain_uuid
-        ↓
-Calculate cost: (billsec / 60) × rate_per_minute
-        ↓
-INSERT into call_records
-        ↓
-Aggregate monthly → generate invoice
+; /etc/asterisk/extensions_custom.conf
+[tenant-client1]
+exten => _.,1,Set(CDR(accountcode)=tenant-client1-uuid)
+ same => n,Goto(from-internal,${EXTEN},1)
 ```
 
-**Python billing worker (minimal example):**
+### CDR Billing Worker (Python)
 
 ```python
-import psycopg2, time
+import mysql.connector, time
 
-FUSIONPBX_DSN = "host=localhost dbname=fusionpbx user=fusionpbx password=secret"
-BILLING_DSN   = "host=localhost dbname=billing   user=billing   password=secret"
+ASTERISK_DB = dict(host="localhost", database="asteriskcdrdb",
+                   user="asterisk", password="secret")
+BILLING_DB  = dict(host="localhost", database="billing",
+                   user="billing",  password="secret")
 
-RATE_PER_MIN = 0.02  # $0.02/min default
+RATE_PER_MIN = 0.02
 
-def process_new_cdrs():
-    fpbx = psycopg2.connect(FUSIONPBX_DSN)
-    bill = psycopg2.connect(BILLING_DSN)
+def process_cdrs():
+    ast = mysql.connector.connect(**ASTERISK_DB)
+    bil = mysql.connector.connect(**BILLING_DB)
 
-    with fpbx.cursor() as cur:
-        cur.execute("""
-            SELECT xml_cdr_uuid, domain_uuid, caller_id_number,
-                   destination_number, start_epoch, billsec
-            FROM v_xml_cdr
-            WHERE start_epoch > EXTRACT(EPOCH FROM NOW() - INTERVAL '2 minutes')
-              AND billsec > 0
-        """)
-        rows = cur.fetchall()
+    ast_cur = ast.cursor(dictionary=True)
+    ast_cur.execute("""
+        SELECT uniqueid, accountcode, src, dst, calldate, billsec
+        FROM cdr
+        WHERE calldate > NOW() - INTERVAL 2 MINUTE
+          AND billsec > 0
+          AND disposition = 'ANSWERED'
+    """)
 
-    with bill.cursor() as cur:
-        for row in rows:
-            cdr_id, domain_uuid, caller, dest, start_ep, billsec = row
-            cost = round((billsec / 60) * RATE_PER_MIN, 4)
-            cur.execute("""
-                INSERT INTO call_records
-                    (call_uuid, tenant_id, caller, destination,
-                     start_time, billable_sec, cost)
-                SELECT %s, tenant_id, %s, %s,
-                       to_timestamp(%s), %s, %s
-                FROM tenants WHERE domain_uuid = %s
-                ON CONFLICT DO NOTHING
-            """, (cdr_id, caller, dest, start_ep, billsec, cost, domain_uuid))
-        bill.commit()
+    bil_cur = bil.cursor()
+    for row in ast_cur.fetchall():
+        cost = round((row['billsec'] / 60) * RATE_PER_MIN, 4)
+        bil_cur.execute("""
+            INSERT IGNORE INTO call_records
+                (call_uuid, tenant_id, caller, destination,
+                 start_time, billable_sec, cost)
+            SELECT %s, tenant_id, %s, %s, %s, %s, %s
+            FROM tenants WHERE sip_context = %s
+        """, (row['uniqueid'], row['src'], row['dst'],
+              row['calldate'], row['billsec'], cost, row['accountcode']))
+    bil.commit()
+    ast_cur.close(); bil_cur.close()
+    ast.close(); bil.close()
 
 while True:
-    process_new_cdrs()
+    process_cdrs()
     time.sleep(60)
 ```
 
@@ -589,47 +486,37 @@ while True:
 import stripe
 stripe.api_key = "sk_live_..."
 
-def charge_tenant(tenant, invoice):
-    # Create or retrieve Stripe customer
-    if not tenant.stripe_customer_id:
-        customer = stripe.Customer.create(
-            email=tenant.email,
-            name=tenant.company_name,
-            metadata={"tenant_id": str(tenant.tenant_id)}
-        )
-        tenant.stripe_customer_id = customer.id
-
-    # Create invoice
+def create_invoice(tenant, period_start, period_end, total_usd):
     inv = stripe.Invoice.create(
-        customer=tenant.stripe_customer_id,
+        customer=tenant['stripe_customer_id'],
         auto_advance=True,
         collection_method="charge_automatically",
     )
     stripe.InvoiceItem.create(
-        customer=tenant.stripe_customer_id,
-        invoice=inv.id,
-        amount=int(invoice.total * 100),  # cents
+        customer=tenant['stripe_customer_id'],
+        invoice=inv['id'],
+        amount=int(total_usd * 100),
         currency="usd",
-        description=f"PBX Service {invoice.period_start} – {invoice.period_end}"
+        description=f"PBX Service {period_start} – {period_end}"
     )
-    stripe.Invoice.finalize_invoice(inv.id)
-    return inv.id
+    stripe.Invoice.finalize_invoice(inv['id'])
+    return inv['id']
 ```
 
-**Flutterwave (for Africa — KES / NGN):**
+### Flutterwave (Kenya / Africa — KES)
 
 ```python
 import requests
 
-def charge_flutterwave(tenant, invoice_total_kes):
-    resp = requests.post("https://api.flutterwave.com/v3/charges?type=mobile_money_kenya", 
-        headers={"Authorization": "Bearer FLWSECK_TEST-..."},
+def charge_mpesa(phone: str, amount_kes: float, ref: str):
+    resp = requests.post(
+        "https://api.flutterwave.com/v3/charges?type=mobile_money_kenya",
+        headers={"Authorization": "Bearer FLWSECK_LIVE-..."},
         json={
-            "phone_number": tenant.phone,
-            "amount": invoice_total_kes,
+            "phone_number": phone,
+            "amount": amount_kes,
             "currency": "KES",
-            "email": tenant.email,
-            "tx_ref": str(invoice.invoice_id),
+            "tx_ref": ref,
             "network": "SAFARICOM"
         }
     )
@@ -640,15 +527,15 @@ def charge_flutterwave(tenant, invoice_total_kes):
 
 ## 🖥️ 9. Customer Portal Architecture
 
-### Recommended Tech Stack
+### Recommended Stack
 
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Frontend | Next.js (React) | SSR + API routes, fast |
-| Backend API | FastAPI (Python) or Node.js | Easy PostgreSQL integration |
-| Auth | JWT + refresh tokens | Stateless, works with SIP |
-| Database | PostgreSQL (billing DB above) | Unified with billing |
-| Hosting | VPS behind Nginx | Same server or separate |
+| Layer | Choice |
+|-------|--------|
+| Frontend | Next.js (React) |
+| Backend API | FastAPI (Python) or Node.js |
+| Auth | JWT + refresh tokens |
+| Database | MariaDB (billing DB above) |
+| Asterisk integration | ARI (REST) + AMI (events) |
 
 ### Core API Endpoints
 
@@ -662,412 +549,324 @@ GET    /cdr?from=&to=               → call history
 GET    /invoices                    → invoice list
 GET    /invoices/:id/pdf            → download invoice
 POST   /billing/payment-method      → attach Stripe card
-GET    /sip-credentials/:ext_id     → return SIP username/password
-POST   /support/ticket              → create support ticket
+GET    /sip-credentials/:ext_id     → SIP username/password
+POST   /support/ticket              → open support ticket
 ```
 
-### Customer Portal Flow
-
-```mermaid
-flowchart LR
-    A[Customer signs up] --> B[Portal creates FusionPBX domain]
-    B --> C[Assigns plan & extensions]
-    C --> D[Generates SIP credentials]
-    D --> E[Sends welcome email with QR code]
-    E --> F[Customer logs into portal]
-    F --> G[Views CDR, invoices, usage]
-    G --> H[Pays via Stripe / Flutterwave]
-```
-
-### Auto-Provisioning a New Tenant (Python + requests)
+### Provision Extension via Asterisk ARI
 
 ```python
-import requests, uuid
+import requests
 
-FUSIONPBX_API = "https://pbx.yourpbx.com"
-API_KEY = "your-fusionpbx-api-key"
+ARI_URL = "http://localhost:8088/ari"
+ARI_AUTH = ("asterisk_user", "asterisk_password")
 
-def provision_tenant(company_name: str, domain: str, admin_email: str):
-    # 1. Create domain in FusionPBX
-    requests.post(f"{FUSIONPBX_API}/app/api/index.php", json={
-        "method": "domain_add",
-        "domain_name": domain,
-        "domain_enabled": "true"
-    }, headers={"X-API-Key": API_KEY})
-
-    # 2. Create admin user
-    requests.post(f"{FUSIONPBX_API}/app/api/index.php", json={
-        "method": "user_add",
-        "domain_name": domain,
-        "username": admin_email,
-        "password": generate_password(),
-        "user_enabled": "true",
-        "groups": ["admin"]
-    }, headers={"X-API-Key": API_KEY})
-
-    # 3. Record in your billing DB
-    db.execute("""
-        INSERT INTO tenants (domain_uuid, company_name, email)
-        VALUES ((SELECT domain_uuid FROM v_domains WHERE domain_name=%s), %s, %s)
-    """, (domain, company_name, admin_email))
+def provision_extension(ext_num: str, password: str, tenant_context: str):
+    # FreePBX REST API — alternative to ARI for module-level provisioning
+    import subprocess
+    subprocess.run([
+        "php", "/var/www/html/admin/modules/core/api.php",
+        "add_extension",
+        f"--ext={ext_num}",
+        f"--password={password}",
+        f"--context={tenant_context}"
+    ])
 ```
 
 ---
 
-## 📊 10. Call Data & Analytics
+## 📊 10. Real-Time Call Monitoring (AMI)
 
-Enable:
-
-- Call Detail Records (CDR)
-- Call recording storage
-- Real-time monitoring
-
-You will use:
-
-- FusionPBX CDR tables
-- FreeSWITCH event socket (advanced analytics)
-
-### Enable CDR in FreeSWITCH
-
-```xml
-<!-- /etc/freeswitch/autoload_configs/cdr_pg_csv.conf.xml -->
-<configuration name="cdr_pg_csv.conf" description="CDR to PostgreSQL">
-  <settings>
-    <param name="db-info" value="host=localhost dbname=fusionpbx user=fusionpbx password=secret connect_timeout=10"/>
-    <param name="log-b-leg" value="true"/>
-  </settings>
-</configuration>
-```
-
-### Real-Time Call Monitoring via ESL
+Asterisk Manager Interface (AMI) is the equivalent of FreeSWITCH ESL — use it for real-time events, live dashboards, and automation triggers.
 
 ```python
-from ESL import ESLconnection
+import socket, time
 
-con = ESLconnection("127.0.0.1", "8021", "ClueCon")
-con.events("plain", "CHANNEL_CREATE CHANNEL_DESTROY CHANNEL_ANSWER")
+def ami_connect(host="127.0.0.1", port=5038,
+                user="admin", secret="your_ami_secret"):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((host, port))
+    sock.recv(1024)  # banner
+    sock.send(f"Action: Login\r\nUsername: {user}\r\nSecret: {secret}\r\n\r\n".encode())
+    sock.recv(1024)  # response
+    sock.send(b"Action: Events\r\nEventMask: call\r\n\r\n")
+    return sock
 
-while True:
-    e = con.recvEvent()
-    if e:
-        event_name  = e.getHeader("Event-Name")
-        call_uuid   = e.getHeader("Unique-ID")
-        caller      = e.getHeader("Caller-Caller-ID-Number")
-        destination = e.getHeader("Caller-Destination-Number")
-        domain      = e.getHeader("variable_domain_name")
-        print(f"{event_name} | {domain} | {caller} → {destination}")
-        # Push to Redis pub/sub for live dashboard
+def listen_events(sock):
+    buf = ""
+    while True:
+        buf += sock.recv(4096).decode(errors="ignore")
+        while "\r\n\r\n" in buf:
+            event_str, buf = buf.split("\r\n\r\n", 1)
+            event = dict(line.split(": ", 1) for line in
+                         event_str.splitlines() if ": " in line)
+            yield event
+
+sock = ami_connect()
+for event in listen_events(sock):
+    if event.get("Event") == "Hangup":
+        print(f"Call ended: {event.get('CallerIDNum')} → {event.get('Exten')} "
+              f"cause={event.get('Cause-txt')}")
+```
+
+**Enable AMI** in `/etc/asterisk/manager.conf`:
+
+```ini
+[general]
+enabled = yes
+port = 5038
+bindaddr = 127.0.0.1   ; NEVER expose to public internet
+
+[admin]
+secret = your_ami_secret
+read = all
+write = all
 ```
 
 ---
 
 ## 🔐 11. Security Hardening
 
-### Fail2Ban — SIP Protection
+### Fail2Ban — Asterisk SIP Protection
 
 ```bash
-apt install fail2ban
+apt install -y fail2ban
 ```
 
-Create `/etc/fail2ban/jail.d/freeswitch.conf`:
+Create `/etc/fail2ban/jail.d/asterisk.conf`:
 
 ```ini
-[freeswitch]
+[asterisk]
 enabled  = true
-port     = 5060,5061
-protocol = udp
-filter   = freeswitch
-logpath  = /var/log/freeswitch/freeswitch.log
+filter   = asterisk
+logpath  = /var/log/asterisk/full
 maxretry = 5
 findtime = 60
 bantime  = 3600
-
-[freeswitch-tcp]
-enabled  = true
-port     = 5060,5061
-protocol = tcp
-filter   = freeswitch
-logpath  = /var/log/freeswitch/freeswitch.log
-maxretry = 5
-bantime  = 3600
 ```
 
-Create `/etc/fail2ban/filter.d/freeswitch.conf`:
+Create `/etc/fail2ban/filter.d/asterisk.conf`:
 
 ```ini
 [Definition]
-failregex = \[WARNING\] sofia_reg.c:\d+ SIP auth failure \(REGISTER\) on sofia profile \'[^']+\' for \[.*\] from ip <HOST>
-            \[WARNING\] sofia_reg.c:\d+ SIP auth failure \(INVITE\) on sofia profile \'[^']+\' for \[.*\] from ip <HOST>
+failregex = (?:NOTICE|WARNING).* (?:Registration|Auth)\s.*from\s.*<HOST>
+            (?:NOTICE|WARNING).* (?:failed|invalid|wrong)\s.*\s<HOST>
 ignoreregex =
 ```
 
 ```bash
 systemctl restart fail2ban
-fail2ban-client status freeswitch   # verify
+fail2ban-client status asterisk
 ```
 
-### Anti-Fraud (Toll Fraud Prevention)
+### Anti-Fraud Rules
 
-Toll fraud is the #1 risk in VoIP SaaS. Implement all of these:
+**1. Disable unauthenticated SIP** in `/etc/asterisk/pjsip.conf`:
 
-**1. Disable anonymous SIP calls:**
-
-```xml
-<!-- /etc/freeswitch/sip_profiles/internal.xml -->
-<param name="auth-calls" value="true"/>
-<param name="auth-all-packets" value="false"/>
+```ini
+[global]
+type = global
+default_outbound_endpoint = default
 ```
 
-**2. International call restrictions by default:**
+Ensure all endpoints require `auth` sections — FreePBX does this by default.
 
-```xml
-<!-- dialplan: block international unless tenant has it enabled -->
-<condition field="destination_number" expression="^(00|011|\+)" break="on-true">
-  <action application="check_acl" data="${domain_name} international_allowed"/>
-  <anti-action application="hangup" data="CALL_REJECTED"/>
-</condition>
+**2. Block international calls by default per tenant:**
+
+```
+; extensions_custom.conf
+[tenant-client1]
+exten => _00.,1,Hangup(21)   ; block international unless explicitly allowed
 ```
 
-**3. Per-tenant concurrent call limits:**
+**3. Concurrent call limits per extension:**
 
-```xml
-<action application="limit" data="db ${domain_name} max_calls 10 !NORMAL_CLEARING"/>
+```
+exten => _.,1,Set(GROUP()=tenant-client1)
+ same => n,GotoIf($[${GROUP_COUNT(tenant-client1)} > 10]?toolimit)
+ same => n,Dial(...)
+ same => n(toolimit),Hangup(17)
 ```
 
-**4. Per-extension daily spend cap (check in billing worker):**
+**4. IP-restrict the FreePBX admin panel:**
 
-```sql
--- Alert if a single extension spends >$20 in one day
-SELECT extension_num, SUM(cost) AS daily_spend
-FROM call_records
-WHERE DATE(start_time) = CURRENT_DATE
-GROUP BY extension_num
-HAVING SUM(cost) > 20;
-```
-
-**5. IP whitelisting for the FusionPBX admin panel:**
-
-```nginx
-location /core/ {
-    allow 196.216.0.0/16;   # your office IP range
-    deny all;
-}
+```apache
+# /etc/apache2/conf.d/freepbx_security.conf
+<Location /admin>
+    Order deny,allow
+    Deny from all
+    Allow from 196.216.0.0/16   # your office IP
+</Location>
 ```
 
 ### Backup & Disaster Recovery
 
 ```bash
-# Daily PostgreSQL backup
-pg_dump fusionpbx | gzip > /backups/fusionpbx_$(date +%F).sql.gz
+# Full FreePBX backup (includes Asterisk config + DB)
+fwconsole backup --id=1   # run configured backup job
 
-# Sync to S3-compatible storage (Backblaze B2 / AWS S3)
+# Manual MariaDB backup
+mysqldump asterisk asteriskcdrdb billing | gzip \
+  > /backups/pbx_$(date +%F).sql.gz
+
+# Sync to S3-compatible storage
 aws s3 sync /backups/ s3://your-pbx-backups/ --delete
-
-# Back up FreeSWITCH config
-tar czf /backups/freeswitch_conf_$(date +%F).tar.gz /etc/freeswitch/
 ```
-
-**Recovery time target:** With daily backups + config snapshots, you should be able to restore a new server in under 2 hours.
 
 ---
 
-## 📈 12. Scaling Strategy (**VERY IMPORTANT** for SaaS)
+## 📈 12. Scaling Strategy
 
 | Phase | Setup |
 |-------|-------|
-| Phase 1 | Single FusionPBX + FreeSWITCH server |
-| Phase 2 | Separate DB server, PBX controller, and media servers |
-| Phase 3 (carrier-grade) | Kamailio SIP proxy, multiple FreeSWITCH nodes, Kubernetes or VM cluster |
+| Phase 1 | Single Asterisk + FreePBX server |
+| Phase 2 | Separate DB server, dedicated media server |
+| Phase 3 (carrier-grade) | Kamailio SIP proxy, multiple Asterisk nodes, DB cluster |
 
-### Phase 3 — Kamailio SIP Proxy Setup
-
-Kamailio sits in front of multiple FreeSWITCH nodes and load-balances SIP:
+### Phase 3 — Kamailio in Front of Multiple Asterisk Nodes
 
 ```
 SIP Clients
     ↓
-Kamailio (dispatcher module)
-    ↓            ↓
-FreeSWITCH-1  FreeSWITCH-2
+Kamailio (dispatcher — round robin)
+    ↓              ↓
+Asterisk-1     Asterisk-2
 ```
 
-**`/etc/kamailio/kamailio.cfg` dispatcher block:**
-
 ```
+# kamailio.cfg dispatcher block
 loadmodule "dispatcher.so"
-
-modparam("dispatcher", "db_url", "postgres://kamailio:pass@localhost/kamailio")
 modparam("dispatcher", "ds_ping_interval", 10)
-modparam("dispatcher", "ds_probing_mode", 1)
 
 route[DISPATCH] {
-    if (!ds_select_dst("1", "4")) {   # group 1, round-robin
-        send_reply("503", "Service Unavailable");
+    if (!ds_select_dst("1", "4")) {
+        sl_send_reply("503", "Unavailable");
         exit;
     }
     t_relay();
 }
 ```
 
-**Insert FreeSWITCH nodes into dispatcher table:**
-
 ```sql
-INSERT INTO dispatcher (setid, destination, attrs)
-VALUES (1, 'sip:192.168.1.10:5060', 'weight=50'),
-       (1, 'sip:192.168.1.11:5060', 'weight=50');
+INSERT INTO dispatcher (setid, destination)
+VALUES (1, 'sip:192.168.1.10:5060'),
+       (1, 'sip:192.168.1.11:5060');
 ```
 
 ---
 
-## 🧩 13. Your White-Label SaaS Layer (What YOU Build)
+## 🤖 13. Automation & AI Integration
 
-**Customer Portal**
-
-- Sign up / login
-- Buy extensions
-- Manage users
-- View usage
-- Pay bills
-
-**Admin Portal**
-
-- Provision tenants
-- Assign SIP trunks
-- Monitor usage
-- Suspend accounts
-
-**Automation**
-
-- WhatsApp integration
-- AI call routing
-- Ticket creation from calls/messages
-
----
-
-## 🤖 14. Automation & AI Integration
-
-### WhatsApp + ERPNext Ticketing
-
-When a call ends, automatically open a support ticket in ERPNext:
+### Missed Call → ERPNext Ticket (via AMI)
 
 ```python
-from ESL import ESLconnection
-import requests
+import socket, requests
 
-ERPNEXT_URL = "https://erp.yourcompany.com"
-ERPNEXT_KEY = "token api_key:api_secret"
+AMI_HOST, AMI_PORT = "127.0.0.1", 5038
+ERPNEXT = "https://erp.yourcompany.com"
+ERP_KEY  = "token api_key:api_secret"
 
-con = ESLconnection("127.0.0.1", "8021", "ClueCon")
-con.events("plain", "CHANNEL_HANGUP_COMPLETE")
-
-while True:
-    e = con.recvEvent()
-    if e and e.getHeader("Event-Name") == "CHANNEL_HANGUP_COMPLETE":
-        caller      = e.getHeader("Caller-Caller-ID-Number")
-        destination = e.getHeader("Caller-Destination-Number")
-        duration    = e.getHeader("variable_duration")
-        domain      = e.getHeader("variable_domain_name")
-
-        if int(duration or 0) < 10:   # missed / very short call
-            requests.post(f"{ERPNEXT_URL}/api/resource/Issue", 
-                headers={"Authorization": ERPNEXT_KEY},
-                json={
-                    "subject": f"Missed call from {caller}",
-                    "description": f"Tenant: {domain}\nCaller: {caller}\nDialled: {destination}",
-                    "issue_type": "Missed Call",
-                    "status": "Open"
-                }
-            )
+sock = ami_connect()
+for event in listen_events(sock):
+    if (event.get("Event") == "Hangup"
+            and event.get("Cause-txt") == "Normal Clearing"
+            and event.get("Duration", "0") == "0"):
+        requests.post(f"{ERPNEXT}/api/resource/Issue",
+            headers={"Authorization": ERP_KEY},
+            json={
+                "subject": f"Missed call from {event.get('CallerIDNum')}",
+                "description": f"Dialled: {event.get('Exten')}\n"
+                               f"Tenant: {event.get('Accountcode')}",
+                "status": "Open"
+            }
+        )
 ```
 
-### WhatsApp Notification on Missed Call (Twilio)
+### AI Call Routing via ARI (Asterisk REST Interface)
+
+```python
+import anthropic, requests
+
+ARI  = "http://localhost:8088/ari"
+AUTH = ("asterisk_user", "password")
+ai   = anthropic.Anthropic()
+
+def classify_intent(transcript: str) -> str:
+    msg = ai.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=32,
+        messages=[{"role": "user", "content":
+            f"Classify into one word — sales|support|billing|other\n\n{transcript}"
+        }]
+    )
+    return msg.content[0].text.strip().lower()
+
+def route_call(channel_id: str, transcript: str):
+    intent = classify_intent(transcript)
+    queue  = {
+        "sales":   "sales-queue",
+        "support": "support-queue",
+        "billing": "billing-queue",
+        "other":   "general-queue"
+    }.get(intent, "general-queue")
+
+    requests.post(f"{ARI}/channels/{channel_id}/continue",
+        auth=AUTH,
+        json={"context": "from-internal",
+              "extension": queue,
+              "priority": 1}
+    )
+```
+
+### WhatsApp Missed Call Alert (Twilio)
 
 ```python
 from twilio.rest import Client
 
 twilio = Client("ACxxxxx", "auth_token")
 
-def notify_whatsapp(to_number: str, caller: str):
+def whatsapp_alert(to: str, caller: str, ext: str):
     twilio.messages.create(
         from_="whatsapp:+14155238886",
-        to=f"whatsapp:{to_number}",
-        body=f"📞 You missed a call from {caller}. Reply to call back or open a ticket."
+        to=f"whatsapp:{to}",
+        body=f"📞 Missed call from {caller} to extension {ext}. Reply to call back."
     )
-```
-
-### AI Call Routing
-
-Use Claude / OpenAI to classify the caller's intent from a short IVR speech input and route accordingly:
-
-```python
-import anthropic, subprocess
-
-client = anthropic.Anthropic()
-
-def classify_intent(transcript: str) -> str:
-    msg = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=64,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Classify this caller intent into one word: "
-                f"sales | support | billing | other\n\nTranscript: {transcript}"
-            )
-        }]
-    )
-    return msg.content[0].text.strip().lower()
-
-# In your FreeSWITCH dialplan, call this via mod_lua or mod_python
-# and transfer to the correct queue based on the returned intent
-def route_call(call_uuid: str, transcript: str):
-    intent = classify_intent(transcript)
-    queue_map = {
-        "sales":   "sales_queue@yourpbx.com",
-        "support": "support_queue@yourpbx.com",
-        "billing": "billing_queue@yourpbx.com",
-        "other":   "general_queue@yourpbx.com",
-    }
-    destination = queue_map.get(intent, queue_map["other"])
-    subprocess.run(["fs_cli", "-x",
-        f"uuid_transfer {call_uuid} {destination} XML default"])
 ```
 
 ---
 
-## 🚀 15. Deployment Checklist
+## 🚀 14. Deployment Checklist
 
-Before launch:
-
-- [x] SIP trunk tested
-- [x] Outbound calls working
-- [x] Inbound routing working
-- [x] NAT audio OK
-- [x] SSL active
-- [x] Tenant isolation verified
-- [x] Billing tracking working
-- [x] Fail2Ban active
-- [x] Backups configured
-- [x] Toll fraud limits set
-- [x] Admin panel IP-restricted
-- [x] CDR worker running
-- [x] Customer portal deployed
-- [x] Stripe / Flutterwave connected
-- [x] Missed-call WhatsApp alerts tested
+- [x] Server provisioned (Debian 12)
+- [x] Firewall configured
+- [x] Asterisk + FreePBX installed
+- [ ] SSL certificate active
+- [ ] SIP trunk connected and tested
+- [ ] Outbound calls working
+- [ ] Inbound routing working
+- [ ] NAT / one-way audio verified from external network
+- [ ] Tenant isolation verified
+- [ ] Fail2Ban active
+- [ ] Admin panel IP-restricted
+- [ ] Toll fraud limits set (concurrent call caps)
+- [ ] CDR billing worker running
+- [ ] Customer portal deployed
+- [ ] Stripe / Flutterwave connected
+- [ ] Backups configured and tested
 
 ---
 
-## 🧠 16. Common Mistakes to Avoid
+## 🧠 15. Common Mistakes to Avoid
 
-- ❌ Editing FreeSWITCH core without backup
-- ❌ Ignoring NAT/RTP configuration (causes no-audio issues)
-- ❌ Not planning billing early
-- ❌ Running single server for too long
-- ❌ Exposing FusionPBX admin publicly without IP restriction
-- ❌ Skipping toll fraud limits — one compromised account can cost thousands overnight
-- ❌ Storing SIP passwords in plaintext in your portal DB (always hash or use a secrets manager)
-- ❌ Forgetting to set concurrent call limits per tenant
-- ❌ Not testing NAT audio from an external network before going live
+- ❌ Using legacy `chan_sip` — always use PJSIP in Asterisk 20
+- ❌ Ignoring NAT/RTP config — #1 cause of one-way audio
+- ❌ Exposing AMI (port 5038) to the public internet
+- ❌ Exposing ARI (port 8088) to the public internet
+- ❌ Not setting `accountcode` in dialplan — breaks CDR-based billing
+- ❌ Skipping toll fraud limits — one compromised extension can cost thousands
+- ❌ Running FreePBX admin panel without IP restriction
+- ❌ Forgetting to test audio from an external mobile network before go-live
+- ❌ Not backing up before FreePBX module updates
 
 ---
 
@@ -1075,13 +874,14 @@ Before launch:
 
 | Component | Role |
 |-----------|------|
-| FusionPBX | PBX core + UI |
-| FreeSWITCH | Carrier-grade voice engine |
-| PostgreSQL | Tenant data + CDR + billing |
+| Asterisk 20 LTS | Carrier-grade call engine + dialplan |
+| FreePBX 17 | Multi-tenant web UI + module system |
+| MariaDB | All PBX config + CDR + billing data |
+| Apache + PHP | FreePBX web server |
 | Nginx (proxy) | White-label branding layer |
-| Billing worker | CDR → invoice automation |
-| Customer portal | Next.js self-service dashboard |
+| AMI | Real-time call events for automation |
+| ARI | REST API for AI routing + programmatic control |
 | Kamailio | SIP load balancer (Phase 3) |
-| Fail2Ban + ACLs | Security & fraud prevention |
-| Your Layer | Branding + billing + customer portal |
+| Fail2Ban + ACLs | Security + fraud prevention |
+| Your Portal | Branding + billing + customer self-service |
 | End Result | SaaS PBX provider (3CX alternative) |
